@@ -67,6 +67,28 @@
        border-radius:9px; border:1px solid var(--line); background:#fff; color:var(--ink); text-decoration:none; }
   .fu-actions .primary { background:var(--green); border-color:var(--green); color:#fff; }
   .empty { text-align:center; color:var(--muted); font-size:14px; padding:30px 10px; }
+  /* territory tracker */
+  .crumb { display:inline-block; font-size:14px; font-weight:600; color:var(--green-dark); margin-bottom:10px; background:none; border:none; padding:4px 0; }
+  .list-row { width:100%; text-align:left; display:flex; justify-content:space-between; align-items:center; gap:8px;
+              background:#fff; border:1px solid var(--line); border-radius:11px; padding:13px 14px; margin-bottom:8px; font-size:15px; }
+  .list-row .sub { display:block; font-size:12px; color:var(--muted); margin-top:2px; }
+  .chip { border-radius:12px; padding:4px 10px; font-size:12px; font-weight:700; white-space:nowrap; flex-shrink:0; }
+  .chip.green { background:#e5f2d9; color:#3a661b; }
+  .chip.red { background:#fbe3e0; color:#a02818; }
+  .chip.amber { background:#fdf1d7; color:#8a6412; }
+  .chip.blue { background:#e1ecf9; color:#1d5a9e; }
+  .chip.purple { background:#efe4f7; color:#6b3fa0; }
+  .chip.big { font-size:14px; padding:7px 14px; }
+  .outcome-btns button { display:block; width:100%; padding:13px; margin-top:8px; border-radius:10px; font-size:15px;
+                         font-weight:600; border:1.5px solid var(--line); background:#fff; color:var(--ink); text-align:left; }
+  .outcome-btns button.o-amber { border-color:#e2bc4f; } .outcome-btns button.o-blue { border-color:#5b93cf; }
+  .outcome-btns button.o-red { border-color:#d98177; } .outcome-btns button.o-green { border-color:#9dc06d; }
+  .visit-row { font-size:13px; color:var(--ink); padding:8px 0; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; gap:8px; }
+  .visit-row .when { color:var(--muted); white-space:nowrap; }
+  .addhome-row { display:flex; gap:6px; }
+  .addhome-row input:first-child { flex:0 0 84px; }
+  .addhome-row input:nth-child(2) { flex:1; }
+  .addhome-row button { flex:0 0 74px; border:none; border-radius:9px; background:var(--green); color:#fff; font-weight:700; }
   .setup-banner { background:var(--red); color:#fff; padding:10px 14px; font-size:13px; text-align:center; display:none; }
   #resultCard a.pdf { color:var(--green-dark); font-weight:700; }
   .photo-thumb { max-width:100%; max-height:140px; border-radius:9px; margin-top:8px; display:none; }
@@ -111,22 +133,9 @@
     <div class="card" id="resultCard" style="display:none"></div>
   </section>
 
-  <!-- ============ DOOR KNOCK ============ -->
+  <!-- ============ DOOR KNOCK: TERRITORY TRACKER ============ -->
   <section class="tab" id="tab-knock">
-    <div class="card">
-      <h2>DOOR KNOCK LOG</h2>
-      <label>Street address (required)</label><input type="text" id="kAddress" autocomplete="off">
-      <label>Interest</label><div class="seg" id="kInterest"></div>
-      <label>Fence age</label><input type="text" id="kAge" placeholder="brand new / 6 months / graying" autocomplete="off">
-      <label>Name (if known)</label><input type="text" id="kName" autocomplete="off">
-      <label>Phone (if known)</label><input type="tel" id="kPhone" inputmode="tel" autocomplete="off">
-      <label>Notes</label><textarea id="kNotes"></textarea>
-      <label>Photo</label>
-      <input type="file" id="kPhoto" accept="image/*" capture="environment">
-      <img class="photo-thumb" id="kThumb" alt="">
-      <button class="btn" id="saveKnock">Save Lead</button>
-      <div class="note">Files as a New door-knock lead. Under 30 seconds is the target.</div>
-    </div>
+    <div id="knockView"><div class="empty">Loading territory…</div></div>
   </section>
 
   <!-- ============ FOLLOW-UPS ============ -->
