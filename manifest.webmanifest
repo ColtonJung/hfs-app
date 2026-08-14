@@ -1,0 +1,14 @@
+{
+  "name": "HFS Pocket Office",
+  "short_name": "HFS",
+  "description": "Heights Fence Staining - quotes, door-knock capture, follow-ups",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#94AD62",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
