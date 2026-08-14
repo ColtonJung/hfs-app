@@ -35,9 +35,11 @@
   .row { display:flex; gap:8px; align-items:center; }
   .row > * { flex:1; }
   .sec-row { display:flex; gap:6px; margin-top:6px; align-items:center; }
-  .sec-row input { flex:2; }
-  .sec-row .seg { flex:3; }
-  .sec-row .del { flex:0 0 34px; height:40px; border:none; background:none; color:var(--red); font-size:20px; }
+  .sec-row .lbl { flex:0 0 72px; font-size:13px; font-weight:600; color:var(--ink); }
+  .sec-row input.lbl-in { flex:0 0 72px; padding:8px 6px; font-size:13px; }
+  .sec-row input[type="number"] { flex:1.1; min-width:0; }
+  .sec-row .seg { flex:2; }
+  .sec-row .del { flex:0 0 30px; height:40px; border:none; background:none; color:var(--red); font-size:20px; }
   .add-sec { margin-top:8px; background:none; border:1px dashed var(--green); color:var(--green-dark);
              padding:9px; width:100%; border-radius:9px; font-size:14px; }
   .totals { display:flex; justify-content:space-between; font-size:14px; margin-top:10px; padding-top:10px; border-top:1px solid var(--line); }

@@ -347,27 +347,36 @@ function shrinkPhoto(file) {
 seg("qSource", SOURCES, 0);
 seg("qHeight", HEIGHTS, 0);
 
-function addSectionRow(ft = "", sides = "One Side") {
+// The five standard local fence sections; ~98% of quotes need nothing else.
+const DEFAULT_SECTIONS = ["Left Front", "Left Side", "Back", "Right Side", "Right Front"];
+function addSectionRow(label = null) {
   const row = document.createElement("div"); row.className = "sec-row";
-  row.innerHTML = `<input type="number" inputmode="numeric" placeholder="FT" value="${ft}">
+  const lblHtml = label !== null
+    ? `<div class="lbl">${esc(label)}</div>`
+    : `<input type="text" class="lbl-in" placeholder="Name" autocomplete="off">`;
+  row.innerHTML = `${lblHtml}<input type="number" inputmode="numeric" placeholder="FT">
     <div class="seg">
-      <button type="button" class="${sides === "One Side" ? "on" : ""}">One Side</button>
-      <button type="button" class="${sides === "Both Sides" ? "on" : ""}">Both Sides</button>
+      <button type="button" class="on">One Side</button>
+      <button type="button">Both Sides</button>
     </div><button type="button" class="del">×</button>`;
+  if (label !== null) row.dataset.label = label;
   row.querySelectorAll(".seg button").forEach(b => b.onclick = () => {
     row.querySelectorAll(".seg button").forEach(x => x.classList.remove("on")); b.classList.add("on"); recalc(); });
   row.querySelector(".del").onclick = () => { row.remove(); recalc(); };
-  row.querySelector("input").oninput = recalc;
+  row.querySelector('input[type="number"]').oninput = recalc;
   $("sections").appendChild(row);
 }
-$("addSec").onclick = () => addSectionRow();
-addSectionRow();
+$("addSec").onclick = () => addSectionRow(null);
+DEFAULT_SECTIONS.forEach(s => addSectionRow(s));
 
 function readSections() {
-  return [...$("sections").querySelectorAll(".sec-row")].map(r => ({
-    ft: parseInt(r.querySelector("input").value, 10) || 0,
-    sides: r.querySelector(".seg button.on")?.textContent || "One Side",
-  })).filter(s => s.ft > 0);
+  // A blank or 0-footage row is simply ignored. Both Sides doubles the billable footage.
+  return [...$("sections").querySelectorAll(".sec-row")].map(r => {
+    const ft = parseInt(r.querySelector('input[type="number"]').value, 10) || 0;
+    const sides = r.querySelector(".seg button.on")?.textContent || "One Side";
+    const name = r.dataset.label || r.querySelector(".lbl-in")?.value.trim() || "Extra section";
+    return { name, ft, sides, billable: sides === "Both Sides" ? ft * 2 : ft };
+  }).filter(s => s.ft > 0);
 }
 
 let rateTouched = false;
@@ -376,25 +385,25 @@ $("qHeight").addEventListener("segchange", () => { rateTouched = false; recalc()
 
 function recalc(updateRate = true) {
   const secs = readSections();
-  const totalFt = secs.reduce((a, s) => a + s.ft, 0);
+  const billable = secs.reduce((a, s) => a + s.billable, 0); // Both Sides counts twice
   const std = segVal("qHeight") === "6 FT standard";
   $("heightWarn").style.display = std ? "none" : "block";
-  if (updateRate && !rateTouched) $("qRate").value = std && totalFt ? bandRate(totalFt) : "";
+  if (updateRate && !rateTouched) $("qRate").value = std && billable ? bandRate(billable) : "";
   const rate = parseFloat($("qRate").value) || 0;
-  $("rateNote").textContent = std ? `Band: $8 under 300 ft · $7 at 300–399 · $6 at 400+. Change the rate to override.` : `Manual rate required for non-standard height.`;
-  $("tFt").textContent = `${totalFt} FT total`;
-  $("tTotal").textContent = `$${fmtMoney(totalFt * rate)}`;
-  return { secs, totalFt, rate, std };
+  $("rateNote").textContent = std ? `Band on billable ft: $8 under 300 · $7 at 300–399 · $6 at 400+. Change the rate to override.` : `Manual rate required for non-standard height.`;
+  $("tFt").textContent = `${billable} FT billable`;
+  $("tTotal").textContent = `$${fmtMoney(billable * rate)}`;
+  return { secs, billable, rate, std };
 }
 
 $("makeQuote").onclick = async () => {
-  const { secs, totalFt, rate, std } = recalc(false);
+  const { secs, billable, rate, std } = recalc(false);
   const name = $("qName").value.trim(), phone = digits($("qPhone").value), address = $("qAddress").value.trim();
   const stain = $("qStain").value.trim() || "TBD";
   if (!address) return toast("Address is required");
   if (!secs.length) return toast("Add at least one section with footage");
   if (!rate) return toast("Enter a rate");
-  const total = totalFt * rate;
+  const total = billable * rate;
 
   // Number the quote from the pipeline; dead zone -> permanent field number.
   const btn = $("makeQuote"); btn.disabled = true; btn.textContent = "Numbering…";
@@ -406,7 +415,12 @@ $("makeQuote").onclick = async () => {
   const pdfHeight = std ? "6 FT" : (segVal("qHeight") === "8 FT" ? "8 FT" : "Mixed heights");
   const noteHeight = std ? "6 FT" : `${pdfHeight} — height review`;
 
-  const blob = makePdf({ quoteNo, name, address, secs, totalFt, rate, total, stain, height: pdfHeight });
+  // Per-section detail is SAVED on the lead (for painter briefs) but stays off the PDF.
+  const sectionsText = secs.map(s =>
+    `${s.name}: ${s.ft} ft — ${s.sides}${s.sides === "Both Sides" ? ` (${s.billable} ft billable)` : ""}`
+  ).join("\n") + `\nBillable total: ${billable} ft`;
+
+  const blob = makePdf({ quoteNo, name, address, billable, rate, total, stain, height: pdfHeight });
 
   // territory hand-off: link the home this quote came from, if any and if unchanged
   let linkHome = null;
@@ -418,9 +432,10 @@ $("makeQuote").onclick = async () => {
 
   enqueue({ kind: "create", linkHome, fields: {
     "Address": address, "Name": name, "Phone": phone, "Source": segVal("qSource"),
-    "Status": phone ? "Quoted" : "New", "Linear Footage": totalFt, "Height Notes": noteHeight,
+    "Status": phone ? "Quoted" : "New", "Linear Footage": billable, "Height Notes": noteHeight,
     "Stain Color": stain, "Rate per Ft": rate, "Quote Amount": total,
     "Quote Sent": todayISO(), "Notes": $("qNotes").value.trim(), "Quote No": quoteNo,
+    "Sections": sectionsText,
   }});
   if (linkHome) { const h = T.homes.find(x => x.id === linkHome); if (h) { h.leadIds = ["pending"]; saveT(); } }
 
@@ -483,8 +498,8 @@ function makePdf(q) {
     doc.setDrawColor(...LINE); doc.line(L, y + 20, R, y + 20);
     y += 20;
   };
-  q.secs.forEach(s => row(`Fence section (${s.sides})`, `${s.ft} FT`, "", ""));
-  row(`Olympic Stain (${q.height})`, `${q.totalFt} FT`, `$${fmtMoney(q.rate)}`, `$${fmtMoney(q.total)}`);
+  // one combined line only — per-section detail lives on the Airtable record, not the PDF
+  row(`Total stain footage (${q.height})`, `${q.billable} FT`, `$${fmtMoney(q.rate)}`, `$${fmtMoney(q.total)}`);
   doc.setFont("helvetica", "bold");
   doc.text("Total", 390, y + 15); doc.text(`$${fmtMoney(q.total)}`, R - 10, y + 15, { align: "right" });
   doc.setDrawColor(...INK); doc.setLineWidth(1.5); doc.line(L, y + 22, R, y + 22); doc.setLineWidth(0.5);
