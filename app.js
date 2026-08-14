@@ -22,11 +22,34 @@ const $ = (id) => document.getElementById(id);
 const store = {
   get token() { return localStorage.getItem("hfs_token") || ""; },
   set token(v) { localStorage.setItem("hfs_token", v); },
-  get counter() { return parseInt(localStorage.getItem("hfs_counter") || "1276", 10); },
-  set counter(v) { localStorage.setItem("hfs_counter", String(v)); },
   get queue() { try { return JSON.parse(localStorage.getItem("hfs_queue") || "[]"); } catch { return []; } },
   set queue(v) { localStorage.setItem("hfs_queue", JSON.stringify(v)); },
 };
+
+// Quote numbering: the pipeline is the single source of truth.
+// Sequence floor = 1275, the last hand-made invoice; the sequence continues from
+// whatever the highest numeric Quote No in Airtable is. Offline quotes get a
+// permanent field number (F + MMDD-HHMM) that is never renumbered.
+const SEQ_FLOOR = 1275;
+async function fetchNextQuoteNumber() {
+  const params = `fields%5B%5D=${encodeURIComponent("Quote No")}` +
+    `&filterByFormula=${encodeURIComponent("{Quote No} != ''")}` +
+    `&sort%5B0%5D%5Bfield%5D=${encodeURIComponent("Quote No")}&sort%5B0%5D%5Bdirection%5D=desc&maxRecords=100`;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 6000);
+  try {
+    const r = await fetch(`${API}?${params}`, { headers: headers(), signal: ctrl.signal });
+    if (!r.ok) throw new Error(`Airtable ${r.status}`);
+    const { records } = await r.json();
+    const nums = records.map((x) => parseInt(x.fields["Quote No"], 10)).filter(Number.isFinite);
+    return pad5(Math.max(SEQ_FLOOR, ...nums) + 1);
+  } finally { clearTimeout(timer); }
+}
+function fieldQuoteNumber() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `F${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+}
 const pad5 = (n) => String(n).padStart(5, "0");
 const digits = (p) => (p || "").replace(/[^\d+]/g, "");
 const firstName = (name) => (name || "").trim().split(/\s+/)[0] || "there";
@@ -159,12 +182,18 @@ $("makeQuote").onclick = async () => {
   if (!secs.length) return toast("Add at least one section with footage");
   if (!rate) return toast("Enter a rate");
   const total = totalFt * rate;
-  const quoteNo = pad5(store.counter);
+
+  // Number the quote from the pipeline; dead zone -> permanent field number.
+  const btn = $("makeQuote"); btn.disabled = true; btn.textContent = "Numbering…";
+  let quoteNo, offlineNo = false;
+  try { quoteNo = await fetchNextQuoteNumber(); }
+  catch (e) { quoteNo = fieldQuoteNumber(); offlineNo = true; }
+  btn.disabled = false; btn.textContent = "Make PDF & Text It";
+
   const pdfHeight = std ? "6 FT" : (segVal("qHeight") === "8 FT" ? "8 FT" : "Mixed heights");
   const noteHeight = std ? "6 FT" : `${pdfHeight} — height review`;
 
   const blob = makePdf({ quoteNo, name, address, secs, totalFt, rate, total, stain, height: pdfHeight });
-  store.counter = store.counter + 1;
 
   enqueue({ kind: "create", fields: {
     "Address": address, "Name": name, "Phone": phone, "Source": segVal("qSource"),
@@ -179,7 +208,7 @@ $("makeQuote").onclick = async () => {
   const rc = $("resultCard");
   rc.style.display = "block";
   rc.innerHTML = `<h2>QUOTE ${quoteNo} — $${fmtMoney(total)}</h2>
-    <div class="note">${phone ? "Logged as Quoted." : "No phone — logged as New; it'll sit in Missing Phone until you get a number."}</div>
+    <div class="note">${offlineNo ? "No signal — issued permanent field number " + quoteNo + ". It stays exactly this on the record when it syncs; it is never renumbered. " : ""}${phone ? "Logged as Quoted." : "No phone — logged as New; it'll sit in Missing Phone until you get a number."}</div>
     <button class="btn" id="shareBtn">Share PDF to Messages</button>
     ${phone ? `<a class="btn sub" style="text-align:center;text-decoration:none" href="sms:${phone}&body=${encodeURIComponent(cover)}">Text cover message</a>` : ""}
     <div class="note" style="margin-top:10px"><a class="pdf" href="${url}" target="_blank">View PDF</a> · saved as HFS Quote ${quoteNo}.pdf</div>`;
@@ -336,11 +365,15 @@ async function loadFollowups() {
 $("fuRefresh").onclick = loadFollowups;
 
 // ---------- SETTINGS tab ----------
-function refreshSettings() {
-  $("sToken").value = store.token; $("sCounter").value = store.counter; updateQueueBadge();
+async function refreshSettings() {
+  $("sToken").value = store.token; updateQueueBadge();
+  const el = $("nextNoDisplay");
+  if (!store.token) { el.textContent = "— (add token first)"; return; }
+  el.textContent = "checking…";
+  try { el.textContent = await fetchNextQuoteNumber(); }
+  catch (e) { el.textContent = "— (no signal right now)"; }
 }
-$("saveToken").onclick = () => { store.token = $("sToken").value.trim(); $("setupBanner").style.display = store.token ? "none" : "block"; toast("Token saved"); flushQueue(); };
-$("saveCounter").onclick = () => { const v = parseInt($("sCounter").value, 10); if (v > 0) { store.counter = v; toast(`Next quote: ${pad5(v)}`); } };
+$("saveToken").onclick = () => { store.token = $("sToken").value.trim(); $("setupBanner").style.display = store.token ? "none" : "block"; toast("Token saved"); flushQueue(); refreshSettings(); };
 $("testConn").onclick = async () => {
   $("connMsg").textContent = "Testing…";
   try {

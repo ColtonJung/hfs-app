@@ -147,10 +147,8 @@
     </div>
     <div class="card">
       <h2>QUOTE NUMBERS</h2>
-      <label>Next quote number</label>
-      <input type="number" id="sCounter" inputmode="numeric">
-      <button class="btn small" id="saveCounter">Save number</button>
-      <div class="note">Continues your invoice sequence. Shown on PDFs as 5 digits (1276 → 01276).</div>
+      <div class="note">Next quote number: <b id="nextNoDisplay">—</b></div>
+      <div class="note">Decided by the pipeline itself (highest existing number + 1), so every device stays in sync. In a dead zone, quotes get a permanent field number like F0814-1432 instead — never renumbered.</div>
     </div>
     <div class="card">
       <h2>WAITING TO UPLOAD</h2>
