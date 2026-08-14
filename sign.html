@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Heights Fence Staining — Service Agreement</title>
+<style>
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:-apple-system,'Helvetica Neue',Helvetica,Arial,sans-serif; color:#3f3f3f; background:#f7f7f4; }
+  .wrap { max-width:560px; margin:0 auto; padding:18px 16px 40px; }
+  .bar { height:8px; background:#94AD62; border-radius:4px; }
+  header { display:flex; align-items:center; gap:12px; margin:18px 0; }
+  header img { height:52px; }
+  header .biz { font-weight:700; letter-spacing:2px; color:#94AD62; font-size:16px; }
+  header .site { font-size:10px; letter-spacing:1px; color:#B5C78E; margin-top:3px; }
+  h1 { font-size:19px; font-weight:300; color:#555; letter-spacing:1px; margin-bottom:4px; }
+  .meta { font-size:13px; color:#777; line-height:1.6; margin-bottom:14px; }
+  .card { background:#fff; border:1px solid #ddd; border-radius:12px; padding:16px; margin-bottom:14px; }
+  .sec { margin-bottom:14px; }
+  .sec h2 { font-size:13px; letter-spacing:.5px; color:#7a9350; text-transform:uppercase; margin-bottom:4px; }
+  .sec p { font-size:14.5px; line-height:1.55; }
+  .consent { font-size:13px; color:#555; font-style:italic; margin:4px 0 12px; line-height:1.5; }
+  label { display:block; font-size:12px; color:#777; margin:10px 0 4px; }
+  input[type=text] { width:100%; font-size:17px; padding:12px; border:1px solid #ddd; border-radius:9px; }
+  button.sign { display:block; width:100%; padding:15px; margin-top:12px; font-size:16px; font-weight:700;
+                border:none; border-radius:11px; background:#94AD62; color:#fff; }
+  button.sign:disabled { opacity:.5; }
+  .done, .expired, .error { text-align:center; padding:34px 14px; font-size:16px; line-height:1.6; }
+  .done .big { font-size:42px; }
+  .hint { font-size:12px; color:#999; text-align:center; margin-top:14px; line-height:1.5; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="bar"></div>
+  <header>
+    <img src="icon-192.png" alt="HFS">
+    <div><div class="biz">HEIGHTS FENCE STAINING</div><div class="site">WWW.HEIGHTSFENCESTAINING.COM</div></div>
+  </header>
+  <div id="main"><div class="error">Loading your agreement…</div></div>
+  <div class="hint">Questions? Just text Colton back — (254) 681-2205.</div>
+  <div class="bar" style="margin-top:20px"></div>
+</div>
+
+<script src="contract-terms.js"></script>
+<script>
+// This page can ONLY add a signature to a dedicated inbox. It has no access to
+// business data. The restricted token below is scoped to the signatures base alone.
+const SIGN_TOKEN = "PASTE_RESTRICTED_TOKEN_HERE";
+const SIG_API = "https://api.airtable.com/v0/app9cEafmguycWPPw/Signatures";
+const esc = (s) => String(s || "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+const hdrs = { "Authorization": `Bearer ${SIGN_TOKEN}`, "Content-Type": "application/json" };
+
+let D = null;
+try { D = b64uDec(location.hash.slice(1)); } catch (e) {}
+
+async function keyStatus(k) { // signed already? voided?
+  const r = await fetch(`${SIG_API}?filterByFormula=${encodeURIComponent(`{Key}='${k}'`)}&maxRecords=1`, { headers: hdrs });
+  if (!r.ok) throw new Error("check failed");
+  const { records } = await r.json();
+  if (!records.length) return { state: "open" };
+  const rec = records[0];
+  return { state: rec.fields.Data === "VOIDED" ? "voided" : "signed", when: rec.createdTime };
+}
+
+function renderContract() {
+  const secs = contractSections(D);
+  document.getElementById("main").innerHTML = `
+    <h1>SERVICE AGREEMENT</h1>
+    <div class="meta">Quote No. ${esc(D.q)} · ${esc(D.dt)}<br>Customer: ${esc(D.n || "—")} · ${esc(D.address)}</div>
+    <div class="card">
+      ${secs.map(([h, t]) => `<div class="sec"><h2>${esc(h)}</h2><p>${esc(t)}</p></div>`).join("")}
+      <p class="consent">${esc(CONSENT_LINE)}</p>
+      <label>Type your full name</label>
+      <input type="text" id="signName" autocomplete="name" placeholder="Full name">
+      <button class="sign" id="signBtn">I agree &amp; sign</button>
+    </div>`;
+  document.getElementById("signBtn").onclick = doSign;
+}
+
+async function doSign() {
+  const name = document.getElementById("signName").value.trim();
+  if (name.length < 2) { document.getElementById("signName").focus(); return; }
+  const btn = document.getElementById("signBtn"); btn.disabled = true; btn.textContent = "Signing…";
+  try {
+    const signedAt = new Date().toISOString();
+    const data = await encPayload(D.k, { name, leadId: D.l, quoteNo: D.q, signedAt, ua: navigator.userAgent.slice(0, 120) });
+    const r = await fetch(SIG_API, { method: "POST", headers: hdrs,
+      body: JSON.stringify({ fields: { Key: D.k, Data: data, TermsV: TERMS_VERSION } }) });
+    if (!r.ok) throw new Error(`submit failed (${r.status})`);
+    localStorage.setItem("hfs_signed_" + D.k, signedAt);
+    document.getElementById("main").innerHTML = `<div class="done"><div class="big">✓</div>
+      <b>Signed!</b><br>Thanks, ${esc(name.split(" ")[0])} — Colton will text your copy of the signed agreement.</div>`;
+  } catch (e) {
+    btn.disabled = false; btn.textContent = "I agree & sign";
+    alert("Couldn't send the signature — check your connection and try once more.");
+  }
+}
+
+(async () => {
+  const main = document.getElementById("main");
+  if (!D || !D.k || !D.q) { main.innerHTML = `<div class="error">This link looks incomplete — text Colton for a fresh one.</div>`; return; }
+  if (SIGN_TOKEN.startsWith("PASTE_")) { main.innerHTML = `<div class="error">Signing isn't switched on yet — text Colton and he'll get you a working link.</div>`; return; }
+  if (localStorage.getItem("hfs_signed_" + D.k)) { main.innerHTML = `<div class="done"><div class="big">✓</div><b>Already signed on this phone.</b><br>Colton has it — he'll text your copy.</div>`; return; }
+  try {
+    const st = await keyStatus(D.k);
+    if (st.state === "signed") { main.innerHTML = `<div class="done"><div class="big">✓</div><b>This agreement is already signed</b><br>(${new Date(st.when).toLocaleDateString()}). Colton has it and will text your copy.</div>`; return; }
+    if (st.state === "voided") { main.innerHTML = `<div class="expired">This signing link has expired — text Colton at (254) 681-2205 for a fresh one.</div>`; return; }
+    renderContract();
+  } catch (e) {
+    main.innerHTML = `<div class="error">Couldn't load right now — check your connection and reopen the link.</div>`;
+  }
+})();
+</script>
+</body>
+</html>

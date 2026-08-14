@@ -65,6 +65,7 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   if (b.dataset.tab === "fu") loadFollowups();
   if (b.dataset.tab === "settings") refreshSettings();
   if (b.dataset.tab === "knock") openTerritory();
+  if (b.dataset.tab === "close") loadClose();
 });
 
 // ---------- airtable ----------
@@ -569,6 +570,203 @@ async function loadFollowups() {
   } catch (e) { list.innerHTML = `<div class="empty">Couldn't load (${esc(e.message)}). Check signal + token.</div>`; }
 }
 $("fuRefresh").onclick = loadFollowups;
+
+// ---------- CLOSE tab (contract & deposit — Job 4) ----------
+const SIG_BASE = "app9cEafmguycWPPw";
+const SIG_TABLE = "Signatures";
+const SITE_URL = "https://coltonjung.github.io/hfs-app/";
+const sigUrl = () => `https://api.airtable.com/v0/${SIG_BASE}/${SIG_TABLE}`;
+const newSignKey = () => { const b = crypto.getRandomValues(new Uint8Array(16)); return [...b].map(x => x.toString(16).padStart(2, "0")).join(""); };
+
+// Owner-approved texts (Phase C design + owner answers, Aug 14 2026). Never reword.
+const CONTRACT_TEXT = (first, link) => `Hey ${first}, glad to have you on board! Here's the agreement to look over and sign — takes about a minute: ${link}. Once it's signed and the deposit's in, we'll get you on the schedule.`;
+const DEPOSIT_TEXT = (first, half) => `Thanks ${first}! For the deposit (${half}), Zelle is easiest — heightsfencestain@gmail.com (HEIGHTS FENCE STAINING LLC). A check or cash works fine too. Soon as it lands, you're on the schedule.`;
+
+function contractData(f) {
+  const total = f["Quote Amount"] || 0;
+  return { address: f["Address"] || "", footage: f["Linear Footage"] || 0, color: f["Stain Color"] || "TBD",
+           total: `$${fmtMoney(total)}`, half: `$${fmtMoney(total / 2)}` };
+}
+function signLink(f, key) {
+  const d = contractData(f);
+  return SITE_URL + "sign.html#" + b64uEnc({ k: key, l: f._id, q: f["Quote No"] || "", n: f["Name"] || "",
+    dt: todayNice(), address: d.address, footage: d.footage, color: d.color, total: d.total, half: d.half });
+}
+
+async function loadClose() {
+  const list = $("closeList");
+  if (!store.token) { list.innerHTML = `<div class="empty">Add your token in Settings first.</div>`; return; }
+  list.innerHTML = `<div class="empty">Loading…</div>`;
+  try {
+    const r = await fetch(`${API}?filterByFormula=${encodeURIComponent(`{Status}='Won'`)}`, { headers: headers() });
+    if (!r.ok) throw new Error(`Airtable ${r.status}`);
+    const { records } = await r.json();
+    // pick up any new signatures before rendering
+    for (const rec of records) {
+      const f = rec.fields;
+      if (f["Sign Key"] && !f["Signed At"]) {
+        try {
+          const sr = await fetch(`${sigUrl()}?filterByFormula=${encodeURIComponent(`{Key}='${f["Sign Key"]}'`)}&maxRecords=1`, { headers: headers() });
+          const { records: sigs } = await sr.json();
+          if (sigs.length && sigs[0].fields.Data !== "VOIDED") {
+            const p = await decPayload(f["Sign Key"], sigs[0].fields.Data);
+            await atPatch(TBL.leads, rec.id, { "Signed At": p.signedAt, "Signer Name": p.name });
+            f["Signed At"] = p.signedAt; f["Signer Name"] = p.name;
+          }
+        } catch (e) { console.warn("sig check", e.message); }
+      }
+    }
+    if (!records.length) { list.innerHTML = `<div class="empty">No won jobs waiting to close. Go get a yes 💪</div>`; return; }
+    list.innerHTML = "";
+    records.forEach(rec => list.appendChild(closeCard(rec)));
+  } catch (e) { list.innerHTML = `<div class="empty">Couldn't load (${esc(e.message)}). Check signal + token.</div>`; }
+}
+$("closeRefresh").onclick = loadClose;
+
+function closeCard(rec) {
+  const f = rec.fields; f._id = rec.id;
+  const first = firstName(f["Name"]);
+  const d = contractData(f);
+  const signed = !!f["Signed At"], hasPdf = !!(f["Contract"] || []).length, depReq = !!f["Deposit Requested"], depRec = !!f["Deposit Received"];
+  const ready = signed && depRec;
+  const card = document.createElement("div"); card.className = "card";
+  card.innerHTML = `
+    <h2>${esc(f["Name"] || "—")} — ${d.total}</h2>
+    <div class="note" style="margin-bottom:6px">${esc(f["Address"] || "")} · Quote ${esc(f["Quote No"] || "—")}</div>
+    <div class="step ${f["Contract Sent"] ? "done" : ""}">
+      <div class="tick">${f["Contract Sent"] ? "✓" : "1"}</div>
+      <div class="body"><div class="t">Contract</div>
+        <div class="s">${f["Contract Sent"] ? `Link sent ${esc(f["Contract Sent"])}` : "Send the signing link"}</div>
+        ${signed ? "" : `<button class="btn small" data-act="contract">${f["Contract Sent"] ? "Re-send link" : "Generate contract & text it"}</button>
+        ${f["Contract Sent"] ? `<button class="btn small sub" data-act="newlink">New link (expires the old one)</button>` : ""}`}
+      </div></div>
+    <div class="step ${signed ? "done" : ""}">
+      <div class="tick">${signed ? "✓" : "2"}</div>
+      <div class="body"><div class="t">Signature</div>
+        <div class="s">${signed ? `Signed by ${esc(f["Signer Name"])} · ${fmtWhen(f["Signed At"])}` : "Waiting — refresh to check"}</div>
+        ${signed && !hasPdf ? `<button class="btn small" data-act="pdf">Make signed PDF & text their copy</button>` : ""}
+        ${hasPdf ? `<div class="s">✓ Signed PDF stored on the lead</div>` : ""}
+      </div></div>
+    <div class="step ${depRec ? "done" : ""}">
+      <div class="tick">${depRec ? "✓" : "3"}</div>
+      <div class="body"><div class="t">Deposit — ${d.half}</div>
+        <div class="s">${depRec ? `Received ${esc(f["Deposit Received"])} · ${esc(f["Deposit Method"] || "")}` : depReq ? `Requested ${esc(f["Deposit Requested"])} — log it when it lands` : "Request it, then log it when it lands"}</div>
+        ${depRec ? "" : `${depReq ? "" : `<button class="btn small" data-act="depreq">Request deposit (text)</button>`}
+        <div class="method-row"><button data-act="dep" data-m="Check">Check ✓</button><button data-act="dep" data-m="Zelle">Zelle ✓</button><button data-act="dep" data-m="Cash">Cash ✓</button></div>`}
+      </div></div>
+    <button class="btn ${ready ? "" : "locked"}" data-act="sched" ${ready ? "" : "disabled"}>${ready ? "Move to Scheduled →" : "Scheduled unlocks after signature + deposit"}</button>`;
+
+  const on = (act, fn) => card.querySelectorAll(`[data-act="${act}"]`).forEach(b => b.onclick = fn);
+  on("contract", async () => {
+    let key = f["Sign Key"];
+    if (!key) {
+      key = newSignKey();
+      await atPatch(TBL.leads, rec.id, { "Sign Key": key, "Contract Sent": todayISO() });
+    } else if (!f["Contract Sent"]) {
+      await atPatch(TBL.leads, rec.id, { "Contract Sent": todayISO() });
+    }
+    const link = signLink(f, key);
+    location.href = `sms:${digits(f["Phone"])}&body=${encodeURIComponent(CONTRACT_TEXT(first, link))}`;
+    setTimeout(loadClose, 800);
+  });
+  on("newlink", async () => {
+    try {
+      await fetch(sigUrl(), { method: "POST", headers: headers(),
+        body: JSON.stringify({ fields: { Key: f["Sign Key"], Data: "VOIDED", TermsV: TERMS_VERSION } }) });
+    } catch (e) {}
+    const key = newSignKey();
+    await atPatch(TBL.leads, rec.id, { "Sign Key": key, "Contract Sent": todayISO() });
+    const link = signLink(f, key);
+    location.href = `sms:${digits(f["Phone"])}&body=${encodeURIComponent(CONTRACT_TEXT(first, link))}`;
+    toast("Old link expired — new one drafted");
+    setTimeout(loadClose, 800);
+  });
+  on("pdf", async () => {
+    const blob = makeContractPdf(f);
+    try {
+      const [, b64] = await blobToDataURL(blob).then(u => u.split(","));
+      const r = await fetch(`${CONTENT_API}/${rec.id}/${encodeURIComponent("Contract")}/uploadAttachment`, {
+        method: "POST", headers: headers(),
+        body: JSON.stringify({ contentType: "application/pdf", filename: `HFS Agreement ${f["Quote No"] || ""} signed.pdf`, file: b64 }) });
+      if (!r.ok) throw new Error(`upload ${r.status}`);
+      toast("Signed PDF stored on the lead");
+    } catch (e) { toast("PDF made, but storing failed — try again with signal"); }
+    const file = new File([blob], `HFS Agreement ${f["Quote No"] || ""} signed.pdf`, { type: "application/pdf" });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], text: `Here's your copy of the signed agreement. Thank you!` }); } catch (e) {}
+    } else {
+      const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = file.name; a.click();
+    }
+    setTimeout(loadClose, 800);
+  });
+  on("depreq", async () => {
+    await atPatch(TBL.leads, rec.id, { "Deposit Requested": todayISO() });
+    location.href = `sms:${digits(f["Phone"])}&body=${encodeURIComponent(DEPOSIT_TEXT(first, d.half))}`;
+    setTimeout(loadClose, 800);
+  });
+  on("dep", async (e) => {
+    await atPatch(TBL.leads, rec.id, { "Deposit Received": todayISO(), "Deposit Method": e.target.dataset.m });
+    toast(`Deposit logged — ${e.target.dataset.m}`); loadClose();
+  });
+  on("sched", async () => {
+    await atPatch(TBL.leads, rec.id, { "Status": "Scheduled" });
+    toast("Scheduled 🎉 — job moves to Phase D territory"); loadClose();
+  });
+  return card;
+}
+
+const blobToDataURL = (blob) => new Promise((res) => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(blob); });
+
+function makeContractPdf(f) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: "pt", format: "letter" });
+  const GREEN = [148, 173, 98], PALE = [181, 199, 142], INK = [63, 63, 63], GRAY = [138, 138, 138];
+  const L = 48, R = 564, W = R - L;
+  const d = contractData(f);
+
+  doc.setFillColor(...GREEN); doc.rect(L, 40, W, 8, "F");
+  doc.setFont("helvetica", "bold"); doc.setFontSize(19); doc.setTextColor(...GREEN);
+  doc.text("HEIGHTS FENCE STAINING", L, 82, { charSpace: 2 });
+  doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(...PALE);
+  doc.text("WWW.HEIGHTSFENCESTAINING.COM", L, 96, { charSpace: 1.5 });
+  try { doc.addImage("data:image/png;base64," + LOGO_B64, "PNG", R - 110, 56, 110, 80); } catch (e) {}
+
+  doc.setFontSize(18); doc.setTextColor(85, 85, 85); doc.text("SERVICE AGREEMENT", L, 165);
+  doc.setFontSize(10); doc.setTextColor(...INK);
+  doc.text(`Quote No. ${f["Quote No"] || "—"} · ${todayNice()}`, L, 185);
+  doc.text(`Customer: ${f["Name"] || "—"} · ${f["Address"] || ""}`, L, 200);
+
+  let y = 232;
+  contractSections(d).forEach(([h, t]) => {
+    doc.setFont("helvetica", "bold"); doc.setFontSize(10.5); doc.setTextColor(...GREEN);
+    doc.text(h.toUpperCase(), L, y); y += 15;
+    doc.setFont("helvetica", "normal"); doc.setTextColor(...INK);
+    const lines = doc.splitTextToSize(t, W - 10);
+    doc.text(lines, L, y); y += lines.length * 13.5 + 12;
+  });
+
+  doc.setFont("helvetica", "italic"); doc.setFontSize(9.5); doc.setTextColor(...GRAY);
+  const consent = doc.splitTextToSize(CONSENT_LINE, W - 10);
+  doc.text(consent, L, y); y += consent.length * 12 + 26;
+
+  doc.setDrawColor(...INK); doc.line(L, y, L + 240, y);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(10); doc.setTextColor(...INK);
+  doc.text(`Signed electronically: ${f["Signer Name"] || ""}`, L, y + 16);
+  doc.text(`Date & time: ${fmtWhen(f["Signed At"])} (Central)`, L, y + 32);
+  doc.setFontSize(8.5); doc.setTextColor(...GRAY);
+  doc.text(`Typed-name signature captured via signing link texted to the customer · Terms ${TERMS_VERSION}`, L, y + 48);
+
+  try {
+    doc.addFileToVFS("GreatVibes.ttf", SIG_FONT_B64);
+    doc.addFont("GreatVibes.ttf", "GreatVibes", "normal");
+    doc.setFont("GreatVibes", "normal"); doc.setFontSize(28);
+  } catch (e) { doc.setFont("helvetica", "italic"); doc.setFontSize(18); }
+  doc.setTextColor(143, 163, 196);
+  doc.text("Colton Jung", R - 10, y + 40, { align: "right" });
+
+  doc.setFillColor(...GREEN); doc.rect(L, 724, W, 8, "F");
+  return doc.output("blob");
+}
 
 // ---------- SETTINGS tab ----------
 async function refreshSettings() {

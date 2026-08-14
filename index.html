@@ -91,6 +91,18 @@
   .addhome-row input:first-child { flex:0 0 84px; }
   .addhome-row input:nth-child(2) { flex:1; }
   .addhome-row button { flex:0 0 74px; border:none; border-radius:9px; background:var(--green); color:#fff; font-weight:700; }
+  /* close tab checklist */
+  .step { display:flex; align-items:flex-start; gap:10px; padding:10px 0; border-top:1px solid var(--line); }
+  .step:first-of-type { border-top:none; }
+  .step .tick { flex:0 0 24px; font-size:16px; text-align:center; color:var(--muted); }
+  .step.done .tick { color:var(--green-dark); }
+  .step .body { flex:1; }
+  .step .t { font-size:14px; font-weight:600; }
+  .step .s { font-size:12px; color:var(--muted); margin-top:2px; }
+  .step .btn.small { margin-top:8px; }
+  .method-row { display:flex; gap:6px; margin-top:8px; }
+  .method-row button { flex:1; padding:10px 4px; font-size:13px; font-weight:600; border-radius:9px; border:1px solid var(--line); background:#fff; color:var(--ink); }
+  .btn.locked { background:#c9c9c9; }
   .setup-banner { background:var(--red); color:#fff; padding:10px 14px; font-size:13px; text-align:center; display:none; }
   #resultCard a.pdf { color:var(--green-dark); font-weight:700; }
   .photo-thumb { max-width:100%; max-height:140px; border-radius:9px; margin-top:8px; display:none; }
@@ -146,6 +158,12 @@
     <button class="btn sub" id="fuRefresh">Refresh</button>
   </section>
 
+  <!-- ============ CLOSE: CONTRACT & DEPOSIT ============ -->
+  <section class="tab" id="tab-close">
+    <div id="closeList"><div class="empty">Loading…</div></div>
+    <button class="btn sub" id="closeRefresh">Refresh</button>
+  </section>
+
   <!-- ============ SETTINGS ============ -->
   <section class="tab" id="tab-settings">
     <div class="card">
@@ -173,12 +191,14 @@
   <button data-tab="quote" class="on"><span class="ico">📝</span>Quote</button>
   <button data-tab="knock"><span class="ico">🚪</span>Door Knock</button>
   <button data-tab="fu"><span class="ico">☕️</span>Follow-ups</button>
+  <button data-tab="close"><span class="ico">🤝</span>Close</button>
   <button data-tab="settings"><span class="ico">⚙️</span>Settings</button>
 </nav>
 
 <div class="toast" id="toast"></div>
 
 <script src="assets.js"></script>
+<script src="contract-terms.js"></script>
 <script src="jspdf.umd.min.js"></script>
 <script src="app.js"></script>
 </body>
