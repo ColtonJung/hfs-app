@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HFS Queue Tests</title>
+<style>
+  body { font-family:-apple-system,Helvetica,Arial,sans-serif; background:#f7f7f4; color:#333; padding:16px; max-width:640px; margin:0 auto; }
+  h1 { font-size:17px; color:#7a9350; margin-bottom:4px; }
+  .sub { font-size:12px; color:#777; margin-bottom:14px; }
+  .t { background:#fff; border:1px solid #ddd; border-radius:10px; padding:10px 12px; margin-bottom:8px; font-size:13.5px; line-height:1.5; }
+  .pass { border-left:5px solid #7a9350; } .fail { border-left:5px solid #c0392b; font-weight:600; }
+  #sum { font-size:15px; font-weight:700; margin-top:12px; }
+</style>
+</head>
+<body>
+<h1>HFS Pocket Office — offline queue tests</h1>
+<div class="sub">Replays the 8/16 field data-loss session (and worse) against the live queue engine. Safe to run anywhere — talks to a fake network, never to Airtable, and restores your phone's real queue when done.</div>
+<div id="out"></div>
+<div id="sum">Running…</div>
+
+<script src="queue.js"></script>
+<script>
+(async () => {
+  const out = document.getElementById("out");
+  let passCount = 0, failCount = 0;
+  const report = (name, ok, detail) => {
+    const d = document.createElement("div");
+    d.className = "t " + (ok ? "pass" : "fail");
+    d.textContent = `${ok ? "PASS" : "FAIL"} — ${name}${detail ? " · " + detail : ""}`;
+    out.appendChild(d);
+    ok ? passCount++ : failCount++;
+  };
+
+  // preserve the real queue/journal/idmap, run tests in a clean sandbox, restore after
+  const saved = {};
+  for (const k of ["hfs_queue", "hfs_journal", "hfs_idmap"]) { saved[k] = localStorage.getItem(k); localStorage.removeItem(k); }
+
+  // ---- fake network ----
+  let net = { online: false, delayMs: 0, failWith: null, permanentOn: null, created: [], patched: [], seq: 0 };
+  const realFetch = window.fetch;
+  window.fetch = async (url, opts = {}) => {
+    url = String(url);
+    if (!url.includes("airtable.example")) return realFetch(url, opts);
+    if (net.delayMs) await new Promise(r => setTimeout(r, net.delayMs));
+    if (net.failWith === "network") throw new TypeError("Failed to fetch");
+    const method = (opts.method || "GET").toUpperCase();
+    const table = url.split("/base/")[1].split("/")[0];
+    if (method === "POST") {
+      const body = JSON.parse(opts.body);
+      if (net.permanentOn && (body.fields.Address || "").includes(net.permanentOn))
+        return new Response(JSON.stringify({ error: "INVALID" }), { status: 422 });
+      const id = "rec_" + table + "_" + (++net.seq);
+      net.created.push({ table, id, fields: body.fields });
+      return new Response(JSON.stringify({ id }), { status: 200 });
+    }
+    if (method === "PATCH") { net.patched.push({ url, fields: JSON.parse(opts.body).fields }); return new Response(JSON.stringify({ id: "p" }), { status: 200 }); }
+    return new Response(JSON.stringify({ records: [] }), { status: 200 });
+  };
+
+  const mkQ = () => createQueue({
+    hasToken: () => true,
+    isOnline: () => net.online,
+    headers: () => ({ "Content-Type": "application/json" }),
+    atUrl: (t) => `https://airtable.example/base/${t}`,
+    contentApi: "https://airtable.example/base/content",
+    homesTable: "Homes", leadsTable: "Leads",
+    onIdMapped: () => {}, onLinkedHome: () => {}, onChange: () => {},
+  });
+  const wipe = () => { localStorage.removeItem("hfs_queue"); localStorage.removeItem("hfs_journal"); localStorage.removeItem("hfs_idmap"); };
+  const wait = (ms) => new Promise(r => setTimeout(r, ms));
+
+  // ============ TEST 1: the exact 8/16 field session ============
+  // dead zone: neighborhood -> 2 homes -> 2 visits, then signal returns
+  {
+    wipe(); net = { ...net, online: false, delayMs: 0, failWith: null, permanentOn: null, created: [], patched: [], seq: 0 };
+    const Q = mkQ();
+    Q.add({ kind: "create", table: "Neighborhoods", tempId: "tmp_N", fields: { Name: "Settlement of Stagecoach" } });
+    Q.add({ kind: "create", table: "Homes", tempId: "tmp_H1", fields: { Address: "101 Stage Line", Neighborhood: ["tmp_N"] } });
+    Q.add({ kind: "create", table: "Homes", tempId: "tmp_H2", fields: { Address: "103 Stage Line", Neighborhood: ["tmp_N"] } });
+    Q.add({ kind: "create", table: "Visits", tempId: "tmp_V1", fields: { Label: "101", Outcome: "No answer — left tag", Home: ["tmp_H1"] } });
+    Q.add({ kind: "create", table: "Visits", tempId: "tmp_V2", fields: { Label: "103", Outcome: "No answer — left tag", Home: ["tmp_H2"] } });
+    const queuedOffline = Q.counts().pending === 5;
+    net.online = true; await Q.flush(); await wait(100);
+    const order = net.created.map(c => c.table).join(",");
+    const h1 = net.created.find(c => c.fields.Address === "101 Stage Line");
+    const v1 = net.created.find(c => c.fields.Label === "101");
+    const nbrId = net.created.find(c => c.table === "Neighborhoods")?.id;
+    report("Field session replay: all 5 records survive dead zone → sync",
+      queuedOffline && net.created.length === 5 && Q.counts().pending === 0 && Q.counts().failed === 0,
+      `created: ${net.created.length}/5`);
+    report("Field session replay: dependency order + links resolved",
+      order === "Neighborhoods,Homes,Homes,Visits,Visits" && h1.fields.Neighborhood[0] === nbrId && v1.fields.Home[0] === h1.id,
+      order);
+  }
+
+  // ============ TEST 2: THE KILLER RACE (what actually ate the data) ============
+  // online but slow: neighborhood create is IN FLIGHT while homes/visits are added
+  {
+    wipe(); net = { ...net, online: true, delayMs: 250, failWith: null, permanentOn: null, created: [], patched: [], seq: 0 };
+    const Q = mkQ();
+    Q.add({ kind: "create", table: "Neighborhoods", tempId: "tmp_N", fields: { Name: "Racetown" } }); // flush starts, hangs 250ms
+    await wait(30); // neighborhood is mid-flight NOW — user keeps working:
+    Q.add({ kind: "create", table: "Homes", tempId: "tmp_H1", fields: { Address: "1 Race St", Neighborhood: ["tmp_N"] } });
+    Q.add({ kind: "create", table: "Homes", tempId: "tmp_H2", fields: { Address: "2 Race St", Neighborhood: ["tmp_N"] } });
+    Q.add({ kind: "create", table: "Visits", tempId: "tmp_V1", fields: { Label: "1", Home: ["tmp_H1"] } });
+    Q.add({ kind: "create", table: "Visits", tempId: "tmp_V2", fields: { Label: "2", Home: ["tmp_H2"] } });
+    await wait(2500);
+    report("Race: records added while a sync call is in flight are NOT clobbered",
+      net.created.length === 5 && Q.counts().pending === 0 && Q.counts().failed === 0,
+      `created: ${net.created.length}/5 (old engine: 1/5)`);
+  }
+
+  // ============ TEST 3: dead-zone lie (onLine=true, requests fail) + keep working ============
+  {
+    wipe(); net = { ...net, online: true, delayMs: 100, failWith: "network", permanentOn: null, created: [], patched: [], seq: 0 };
+    const Q = mkQ();
+    Q.add({ kind: "create", table: "Neighborhoods", tempId: "tmp_N", fields: { Name: "Deadzone Estates" } });
+    await wait(30);
+    Q.add({ kind: "create", table: "Homes", tempId: "tmp_H1", fields: { Address: "1 Nowhere Rd", Neighborhood: ["tmp_N"] } });
+    Q.add({ kind: "create", table: "Visits", tempId: "tmp_V1", fields: { Label: "1", Home: ["tmp_H1"] } });
+    await wait(400);
+    const allStillQueued = Q.counts().pending === 3 && Q.counts().failed === 0;
+    net.failWith = null; net.delayMs = 0;
+    await Q.flush(); await wait(100);
+    report("Dead-zone failures keep ALL records queued (nothing dropped, nothing failed-out)",
+      allStillQueued && net.created.length === 3 && Q.counts().pending === 0,
+      allStillQueued ? "3 held, then 3 synced" : `held ${Q.counts().pending}`);
+  }
+
+  // ============ TEST 4: permanent rejection is VISIBLE, never silent ============
+  {
+    wipe(); net = { ...net, online: true, delayMs: 0, failWith: null, permanentOn: "BAD", created: [], patched: [], seq: 0 };
+    const Q = mkQ();
+    Q.add({ kind: "create", table: "Neighborhoods", tempId: "tmp_N", fields: { Name: "Mixed Results" } });
+    Q.add({ kind: "create", table: "Homes", tempId: "tmp_HBAD", fields: { Address: "9 BAD DATA Ln", Neighborhood: ["tmp_N"] } });
+    Q.add({ kind: "create", table: "Visits", tempId: "tmp_V1", fields: { Label: "child of bad", Home: ["tmp_HBAD"] } });
+    Q.add({ kind: "create", table: "Homes", tempId: "tmp_HOK", fields: { Address: "11 Fine St", Neighborhood: ["tmp_N"] } });
+    await Q.flush(); await wait(150);
+    const failed = Q.items().filter(i => i.state === "failed");
+    report("Rejected record + its child are marked FAILED and kept; the rest still sync",
+      net.created.length === 2 && failed.length === 2 && Q.counts().pending === 0,
+      `synced ${net.created.length}, visibly failed ${failed.length}`);
+    // retry after the data is "fixed"
+    net.permanentOn = null;
+    Q.items().filter(i => i.state === "failed").length && Q.retryAll(); await wait(150);
+    report("Retry-all recovers failed records once the cause is fixed",
+      net.created.length === 4 && Q.counts().failed === 0 && Q.counts().pending === 0,
+      `total synced: ${net.created.length}/4`);
+  }
+
+  // ============ TEST 5: the journal net ============
+  {
+    wipe(); net = { ...net, online: false, created: [], seq: 0, permanentOn: null, failWith: null, delayMs: 0 };
+    const Q = mkQ();
+    Q.add({ kind: "create", table: "Homes", tempId: "tmp_HX", fields: { Address: "Journal Proof Ave" } });
+    localStorage.setItem("hfs_queue", "[]"); // simulate a catastrophic future bug wiping the queue
+    const j = Q.journal();
+    report("Journal survives even a wiped queue (last-resort recovery copy)",
+      j.length === 1 && j[0].fields.Address === "Journal Proof Ave", `journal entries: ${j.length}`);
+  }
+
+  // restore the phone's real data
+  for (const k of Object.keys(saved)) { if (saved[k] === null) localStorage.removeItem(k); else localStorage.setItem(k, saved[k]); }
+  window.fetch = realFetch;
+  document.getElementById("sum").textContent = failCount === 0
+    ? `✅ ALL ${passCount} CHECKS PASSED — your real queue was untouched.`
+    : `❌ ${failCount} FAILED / ${passCount} passed`;
+})();
+</script>
+</body>
+</html>

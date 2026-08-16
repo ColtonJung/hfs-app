@@ -55,13 +55,20 @@ const hdrs = { "Authorization": `Bearer ${SIGN_TOKEN}`, "Content-Type": "applica
 let D = null;
 try { D = b64uDec(location.hash.slice(1)); } catch (e) {}
 
+async function timedFetch(url, opts) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 20000);
+  try { return await fetch(url, { ...opts, signal: ctrl.signal }); }
+  finally { clearTimeout(t); }
+}
+
 async function keyStatus(k) { // signed already? voided?
-  const r = await fetch(`${SIG_API}?filterByFormula=${encodeURIComponent(`{Key}='${k}'`)}&maxRecords=1`, { headers: hdrs });
+  const r = await timedFetch(`${SIG_API}?filterByFormula=${encodeURIComponent(`{Key}='${k}'`)}`, { headers: hdrs });
   if (!r.ok) throw new Error("check failed");
   const { records } = await r.json();
   if (!records.length) return { state: "open" };
-  const rec = records[0];
-  return { state: rec.fields.Data === "VOIDED" ? "voided" : "signed", when: rec.createdTime };
+  if (records.some(rec => rec.fields.Data === "VOIDED")) return { state: "voided" };
+  return { state: "signed", when: records[0].createdTime };
 }
 
 function renderContract() {
@@ -84,12 +91,16 @@ async function doSign() {
   if (name.length < 2) { document.getElementById("signName").focus(); return; }
   const btn = document.getElementById("signBtn"); btn.disabled = true; btn.textContent = "Signing…";
   try {
+    // re-check at the moment of signing: the link may have been replaced while this page sat open
+    const st = await keyStatus(D.k);
+    if (st.state === "voided") { document.getElementById("main").innerHTML = `<div class="expired">This signing link has expired — text Colton at (254) 681-2205 for a fresh one.</div>`; return; }
+    if (st.state === "signed") { document.getElementById("main").innerHTML = `<div class="done"><div class="big">✓</div><b>This agreement is already signed.</b><br>Colton has it and will text your copy.</div>`; return; }
     const signedAt = new Date().toISOString();
     const data = await encPayload(D.k, { name, leadId: D.l, quoteNo: D.q, signedAt, ua: navigator.userAgent.slice(0, 120) });
-    const r = await fetch(SIG_API, { method: "POST", headers: hdrs,
+    const r = await timedFetch(SIG_API, { method: "POST", headers: hdrs,
       body: JSON.stringify({ fields: { Key: D.k, Data: data, TermsV: TERMS_VERSION } }) });
     if (!r.ok) throw new Error(`submit failed (${r.status})`);
-    localStorage.setItem("hfs_signed_" + D.k, signedAt);
+    try { localStorage.setItem("hfs_signed_" + D.k, signedAt); } catch (e) {}
     document.getElementById("main").innerHTML = `<div class="done"><div class="big">✓</div>
       <b>Signed!</b><br>Thanks, ${esc(name.split(" ")[0])} — Colton will text your copy of the signed agreement.</div>`;
   } catch (e) {

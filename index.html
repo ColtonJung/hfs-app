@@ -182,7 +182,10 @@
     <div class="card">
       <h2>WAITING TO UPLOAD</h2>
       <div class="note" id="queueMsg">Nothing queued.</div>
+      <div id="failedList"></div>
+      <button class="btn small" id="retryAll">Retry failed items</button>
       <button class="btn small sub" id="syncNow">Sync now</button>
+      <div class="note">Queued work is never discarded on its own — it stays here, visibly, until it uploads or you discard it yourself.</div>
     </div>
   </section>
 </main>
@@ -199,6 +202,7 @@
 
 <script src="assets.js"></script>
 <script src="contract-terms.js"></script>
+<script src="queue.js"></script>
 <script src="jspdf.umd.min.js"></script>
 <script src="app.js"></script>
 </body>

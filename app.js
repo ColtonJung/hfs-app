@@ -125,43 +125,47 @@ function fieldQuoteNumber() {
   return `F${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
 }
 
-// ---------- offline queue (v2: multi-table, temp-id aware) ----------
-const LINK_KEYS = ["Neighborhood", "Home", "Lead"];
-function enqueue(item) { const q = store.queue; q.push({ ...item, ts: Date.now() }); store.queue = q; updateQueueBadge(); flushQueue(); }
-let flushing = false;
-async function flushQueue() {
-  if (flushing || !store.token || !navigator.onLine) return;
-  flushing = true;
-  let q = store.queue;
-  while (q.length) {
-    const item = q[0];
-    const map = store.idmap;
-    const xl = (v) => { if (!isTemp(v)) return v; if (!map[v]) throw new Error("temp id not resolved yet"); return map[v]; };
-    try {
-      const table = item.table || TBL.leads;
-      if (item.kind === "create") {
-        const fields = { ...item.fields };
-        for (const k of LINK_KEYS) if (Array.isArray(fields[k])) fields[k] = fields[k].map(xl);
-        const rec = await atCreate(table, fields);
-        if (item.tempId) { const m = store.idmap; m[item.tempId] = rec.id; store.idmap = m; remapTerritory(item.tempId, rec.id); }
-        if (item.photo) { try { await atUploadPhoto(rec.id, item.photoField || "Photos", item.photo); } catch (e) { console.warn("photo failed", e); } }
-        if (item.linkHome) { try { await atPatch(TBL.homes, xl(item.linkHome), { Lead: [rec.id] }); linkHomeLocal(item.linkHome, rec.id); } catch (e) { console.warn("home link failed", e); } }
-      } else if (item.kind === "patch") {
-        const fields = { ...item.fields };
-        for (const k of LINK_KEYS) if (Array.isArray(fields[k])) fields[k] = fields[k].map(xl);
-        await atPatch(item.table || TBL.leads, xl(item.recordId), fields);
-      }
-      q.shift(); store.queue = q;
-    } catch (e) { console.warn("flush stopped:", e.message); break; }
-  }
-  flushing = false; updateQueueBadge();
-}
+// ---------- offline queue: engine lives in queue.js (post data-loss rebuild) ----------
+const Q = createQueue({
+  hasToken: () => !!store.token,
+  isOnline: () => navigator.onLine,
+  headers, atUrl, contentApi: CONTENT_API,
+  homesTable: TBL.homes, leadsTable: TBL.leads,
+  sigUrl: `https://api.airtable.com/v0/app9cEafmguycWPPw/Signatures`,
+  onIdMapped: (tmp, real) => remapTerritory(tmp, real),
+  onLinkedHome: (homeId, leadId) => linkHomeLocal(homeId, leadId),
+  onChange: () => updateQueueBadge(),
+  onWarn: (m) => toast(m, 6000),
+});
+const enqueue = (item) => Q.add(item);
+const flushQueue = () => Q.flush();
+
 function updateQueueBadge() {
-  const n = store.queue.length, b = $("queueBadge");
-  b.style.display = n ? "block" : "none"; b.textContent = `${n} queued`;
-  const qm = $("queueMsg"); if (qm) qm.textContent = n ? `${n} item(s) waiting for signal + token.` : "Nothing queued.";
+  const { pending, failed } = Q.counts();
+  const b = $("queueBadge");
+  b.style.display = (pending + failed) ? "block" : "none";
+  b.textContent = failed ? `⚠️ ${failed} failed · ${pending} waiting` : `${pending} queued`;
+  b.style.background = failed ? "var(--red)" : "";
+  renderQueuePanel();
 }
-window.addEventListener("online", flushQueue);
+function renderQueuePanel() {
+  const qm = $("queueMsg"); if (!qm) return;
+  const { pending, failed } = Q.counts();
+  qm.textContent = (pending + failed)
+    ? `${pending} waiting to upload${failed ? ` · ${failed} FAILED — see below, nothing is discarded without you` : ""}`
+    : "Nothing queued — everything is in the pipeline.";
+  const fl = $("failedList"); if (!fl) return;
+  const bad = Q.items().filter(i => i.state === "failed");
+  fl.innerHTML = bad.map(i => {
+    const f = i.fields || {};
+    const label = f.Address || f.Label || f.Name || i.kind;
+    return `<div class="note" style="margin-top:8px">⚠️ <b>${esc(i.table || "Leads")}</b> — ${esc(label)}<br>${esc(i.lastError || "")} (${i.attempts || 0} tries)
+      <button class="btn small sub" data-qd="${esc(i.qid)}">Discard permanently</button></div>`;
+  }).join("");
+  fl.querySelectorAll("[data-qd]").forEach(b => b.onclick = () => {
+    if (confirm("Permanently discard this unsent record? It is NOT in Airtable and this cannot be undone.")) { Q.discard(b.dataset.qd); }
+  });
+}
 
 // ---------- TERRITORY (Door Knock tab) ----------
 let T = store.territory || { nbrs: [], homes: [], visits: [] };
@@ -331,15 +335,21 @@ function renderKnock() {
 }
 
 function shrinkPhoto(file) {
+  // must NEVER hang: a photo that won't decode resolves null so the record itself still saves
   return new Promise((res) => {
+    const bail = setTimeout(() => res(null), 8000);
     const img = new Image();
     img.onload = () => {
-      const c = document.createElement("canvas");
-      const scale = Math.min(1, 1600 / Math.max(img.width, img.height));
-      c.width = img.width * scale; c.height = img.height * scale;
-      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
-      res(c.toDataURL("image/jpeg", 0.8));
+      clearTimeout(bail);
+      try {
+        const c = document.createElement("canvas");
+        const scale = Math.min(1, 1600 / Math.max(img.width, img.height));
+        c.width = img.width * scale; c.height = img.height * scale;
+        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+        res(c.toDataURL("image/jpeg", 0.8));
+      } catch (e) { res(null); }
     };
+    img.onerror = () => { clearTimeout(bail); res(null); };
     img.src = URL.createObjectURL(file);
   });
 }
@@ -429,7 +439,6 @@ $("makeQuote").onclick = async () => {
     const pend = JSON.parse(localStorage.getItem("hfs_pending_home") || "null");
     if (pend && pend.address === address) { linkHome = pend.homeId; }
   } catch (e) {}
-  localStorage.removeItem("hfs_pending_home");
 
   enqueue({ kind: "create", linkHome, fields: {
     "Address": address, "Name": name, "Phone": phone, "Source": segVal("qSource"),
@@ -438,6 +447,7 @@ $("makeQuote").onclick = async () => {
     "Quote Sent": todayISO(), "Notes": $("qNotes").value.trim(), "Quote No": quoteNo,
     "Sections": sectionsText,
   }});
+  localStorage.removeItem("hfs_pending_home");  // only after the record is safely queued
   if (linkHome) { const h = T.homes.find(x => x.id === linkHome); if (h) { h.leadIds = ["pending"]; saveT(); } }
 
   const file = new File([blob], `HFS Quote ${quoteNo}.pdf`, { type: "application/pdf" });
@@ -656,30 +666,29 @@ function closeCard(rec) {
       </div></div>
     <button class="btn ${ready ? "" : "locked"}" data-act="sched" ${ready ? "" : "disabled"}>${ready ? "Move to Scheduled →" : "Scheduled unlocks after signature + deposit"}</button>`;
 
+  // every write below goes through the queue: a dead zone can delay a sync, never eat a tap
+  const localUpdate = (fields) => { Object.assign(f, fields); const fresh = closeCard(rec); card.replaceWith(fresh); };
   const on = (act, fn) => card.querySelectorAll(`[data-act="${act}"]`).forEach(b => b.onclick = fn);
-  on("contract", async () => {
+  on("contract", () => {
     let key = f["Sign Key"];
-    if (!key) {
-      key = newSignKey();
-      await atPatch(TBL.leads, rec.id, { "Sign Key": key, "Contract Sent": todayISO() });
-    } else if (!f["Contract Sent"]) {
-      await atPatch(TBL.leads, rec.id, { "Contract Sent": todayISO() });
-    }
+    const patch = {};
+    if (!key) { key = newSignKey(); patch["Sign Key"] = key; }
+    if (!f["Contract Sent"]) patch["Contract Sent"] = todayISO();
+    if (Object.keys(patch).length) enqueue({ kind: "patch", table: TBL.leads, recordId: rec.id, fields: patch });
     const link = signLink(f, key);
+    localUpdate({ "Sign Key": key, "Contract Sent": f["Contract Sent"] || todayISO() });
     location.href = `sms:${digits(f["Phone"])}&body=${encodeURIComponent(CONTRACT_TEXT(first, link))}`;
-    setTimeout(loadClose, 800);
   });
-  on("newlink", async () => {
-    try {
-      await fetch(sigUrl(), { method: "POST", headers: headers(),
-        body: JSON.stringify({ fields: { Key: f["Sign Key"], Data: "VOIDED", TermsV: TERMS_VERSION } }) });
-    } catch (e) {}
+  on("newlink", () => {
+    const oldKey = f["Sign Key"];
     const key = newSignKey();
-    await atPatch(TBL.leads, rec.id, { "Sign Key": key, "Contract Sent": todayISO() });
+    // order matters: store the NEW key first, then expire the old one (both queued, FIFO)
+    enqueue({ kind: "patch", table: TBL.leads, recordId: rec.id, fields: { "Sign Key": key, "Contract Sent": todayISO() } });
+    if (oldKey) enqueue({ kind: "sigvoid", key: oldKey, termsV: TERMS_VERSION });
+    localUpdate({ "Sign Key": key, "Contract Sent": todayISO() });
     const link = signLink(f, key);
-    location.href = `sms:${digits(f["Phone"])}&body=${encodeURIComponent(CONTRACT_TEXT(first, link))}`;
     toast("Old link expired — new one drafted");
-    setTimeout(loadClose, 800);
+    location.href = `sms:${digits(f["Phone"])}&body=${encodeURIComponent(CONTRACT_TEXT(first, link))}`;
   });
   on("pdf", async () => {
     const blob = makeContractPdf(f);
@@ -699,18 +708,20 @@ function closeCard(rec) {
     }
     setTimeout(loadClose, 800);
   });
-  on("depreq", async () => {
-    await atPatch(TBL.leads, rec.id, { "Deposit Requested": todayISO() });
+  on("depreq", () => {
+    enqueue({ kind: "patch", table: TBL.leads, recordId: rec.id, fields: { "Deposit Requested": todayISO() } });
+    localUpdate({ "Deposit Requested": todayISO() });
     location.href = `sms:${digits(f["Phone"])}&body=${encodeURIComponent(DEPOSIT_TEXT(first, d.half))}`;
-    setTimeout(loadClose, 800);
   });
-  on("dep", async (e) => {
-    await atPatch(TBL.leads, rec.id, { "Deposit Received": todayISO(), "Deposit Method": e.target.dataset.m });
-    toast(`Deposit logged — ${e.target.dataset.m}`); loadClose();
+  on("dep", (e) => {
+    const fields = { "Deposit Received": todayISO(), "Deposit Method": e.target.dataset.m };
+    enqueue({ kind: "patch", table: TBL.leads, recordId: rec.id, fields });
+    toast(`Deposit logged — ${e.target.dataset.m}`); localUpdate(fields);
   });
-  on("sched", async () => {
-    await atPatch(TBL.leads, rec.id, { "Status": "Scheduled" });
-    toast("Scheduled 🎉 — job moves to Phase D territory"); loadClose();
+  on("sched", () => {
+    enqueue({ kind: "patch", table: TBL.leads, recordId: rec.id, fields: { "Status": "Scheduled" } });
+    toast("Scheduled 🎉 — job moves to Phase D territory");
+    card.remove();
   });
   return card;
 }
@@ -789,6 +800,7 @@ $("syncNow").onclick = async () => {
   toast("Syncing…"); flushQueue();
   try { await loadTerritory(); if (KV) renderKnock(); toast("Territory refreshed"); } catch (e) {}
 };
+$("retryAll").onclick = () => { Q.retryAll(); toast("Retrying failed items…"); };
 
 // ---------- boot ----------
 $("setupBanner").style.display = store.token ? "none" : "block";
