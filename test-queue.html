@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
 <title>HFS Queue Tests</title>
 <style>
   body { font-family:-apple-system,Helvetica,Arial,sans-serif; background:#f7f7f4; color:#333; padding:16px; max-width:640px; margin:0 auto; }
@@ -75,7 +76,7 @@
   {
     wipe(); net = { ...net, online: false, delayMs: 0, failWith: null, permanentOn: null, created: [], patched: [], seq: 0 };
     const Q = mkQ();
-    Q.add({ kind: "create", table: "Neighborhoods", tempId: "tmp_N", fields: { Name: "Settlement of Stagecoach" } });
+    Q.add({ kind: "create", table: "Neighborhoods", tempId: "tmp_N", fields: { Name: "Meadowlark Crossing" } });
     Q.add({ kind: "create", table: "Homes", tempId: "tmp_H1", fields: { Address: "101 Stage Line", Neighborhood: ["tmp_N"] } });
     Q.add({ kind: "create", table: "Homes", tempId: "tmp_H2", fields: { Address: "103 Stage Line", Neighborhood: ["tmp_N"] } });
     Q.add({ kind: "create", table: "Visits", tempId: "tmp_V1", fields: { Label: "101", Outcome: "No answer — left tag", Home: ["tmp_H1"] } });
