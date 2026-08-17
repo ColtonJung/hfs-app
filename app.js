@@ -16,7 +16,9 @@ const COVER = (first) => `Hey ${first}, thank you for your time today. Here's yo
 
 const SOURCES = ["Door-knock", "Hanger", "Website", "Referral"];
 const HEIGHTS = ["6 FT standard", "8 FT", "Mixed heights"];
-const OUTCOMES = ["Talked — interested", "Talked — gave quote", "Talked — not interested", "No answer — left tag", "No answer — no tag"];
+// "Spotted" is a real logged outcome (owner call, Aug 16) — but it never counts
+// as a knock or a door tag, so it can't start the one-tag-per-month clock.
+const OUTCOMES = ["Talked — interested", "Talked — gave quote", "Talked — not interested", "No answer — left tag", "No answer — no tag", "Spotted"];
 const TAG_WAIT_DAYS = 30; // second door tag only after a month of no-answer
 
 // ---------- tiny helpers ----------
@@ -211,7 +213,7 @@ async function openTerritory() {
   renderKnock();
   if (!territoryLoaded && store.token && navigator.onLine) {
     try { await loadTerritory(); renderKnock(); }
-    catch (e) { if (!T.nbrs.length) $("knockView").innerHTML = `<div class="empty">Couldn't load territory (${esc(e.message)}). Working from what's on this phone.</div>`; }
+    catch (e) { toast("No signal — working from what's on this phone"); } // never hide the add form: offline work must always be possible
   }
 }
 
@@ -219,14 +221,15 @@ async function openTerritory() {
 function computeChip(home) {
   if (home.leadIds && home.leadIds.length) return { label: "Skip — in pipeline", cls: "blue", quote: false };
   const vs = T.visits.filter(v => v.homeId === home.id).sort((a, b) => new Date(b.when) - new Date(a.when));
-  const talked = vs.find(v => v.outcome.startsWith("Talked"));
+  const knocks = vs.filter(v => v.outcome !== "Spotted"); // Spotted visits never count as knocks or tags
+  const talked = knocks.find(v => v.outcome.startsWith("Talked"));
   if (talked) {
     if (talked.outcome === "Talked — not interested") return { label: "Skip — not interested", cls: "red", quote: false };
     if (talked.outcome === "Talked — gave quote") return { label: "Skip — in pipeline", cls: "blue", quote: true };
     return { label: "Interested — revisit", cls: "amber", quote: true };
   }
-  if (vs.length) { // no-answer history only: knocking again is always fine, tags are rationed
-    const lastTag = vs.find(v => v.outcome === "No answer — left tag");
+  if (knocks.length) { // no-answer knocks only: knocking again is always fine, tags are rationed
+    const lastTag = knocks.find(v => v.outcome === "No answer — left tag");
     if (!lastTag || daysSince(lastTag.when) >= TAG_WAIT_DAYS) return { label: "Knock — tag OK", cls: "green", quote: false };
     const d = new Date(lastTag.when); d.setDate(d.getDate() + TAG_WAIT_DAYS);
     return { label: `Knock — no tag until ${d.getMonth() + 1}/${d.getDate()}`, cls: "green", quote: false };
@@ -266,30 +269,30 @@ function renderKnock() {
       const c = computeChip(h);
       return `<button class="list-row" data-home="${esc(h.id)}"><span>${esc(h.address)}</span><span class="chip ${c.cls}">${esc(c.label)}</span></button>`;
     }).join("");
+    const streets = [...new Set(homes.map(h => h.street).filter(Boolean))];
     el.innerHTML = `<button class="crumb" id="backNbrs">‹ Neighborhoods</button>
       <div class="card"><h2>${esc(nbr.name).toUpperCase()}</h2>
-        <div class="addhome-row"><input type="text" id="hNo" placeholder="No." inputmode="numeric" autocomplete="off"><input type="text" id="hStreet" placeholder="Street name" value="${esc(KV.lastStreet)}" autocomplete="off"><button id="addHome">Add</button></div>
-        <details style="margin-top:8px"><summary class="note">+ note / photo / not moved in</summary>
-          <input type="text" id="hNote" placeholder="Note (optional)" style="margin-top:8px" autocomplete="off">
-          <input type="file" id="hPhoto" accept="image/*" capture="environment" style="margin-top:8px">
-          <label style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:14px;color:var(--ink)"><input type="checkbox" id="hNotMoved" style="width:auto"> Fence is new, nobody moved in yet</label>
-        </details>
+        <div class="addhome-row"><input type="text" id="hNo" placeholder="No." inputmode="numeric" autocomplete="off"><input type="text" id="hStreet" placeholder="Street name" value="${esc(KV.lastStreet)}" autocomplete="off" list="streetSugg"><button id="addHome">Add</button></div>
+        <datalist id="streetSugg">${streets.map(s => `<option value="${esc(s)}">`).join("")}</datalist>
         <div style="margin-top:12px">${rows || `<div class="empty">No homes logged here yet.</div>`}</div></div>`;
     $("backNbrs").onclick = () => { KV = { ...KV, level: "nbrs" }; renderKnock(); };
     el.querySelectorAll("[data-home]").forEach(b => b.onclick = () => { KV = { ...KV, level: "home", homeId: b.dataset.home }; renderKnock(); });
-    $("addHome").onclick = async () => {
+    $("addHome").onclick = () => {
       const no = $("hNo").value.trim(), street = $("hStreet").value.trim();
       if (!no || !street) return toast("Number + street");
       const address = `${no} ${street}`;
+      KV.lastStreet = street;
+      // duplicate protection: same address (case/spacing-insensitive) in this neighborhood -> open it
+      const norm = (s) => s.toLowerCase().replace(/\s+/g, " ").trim();
+      const dupe = T.homes.find(h => h.nbrId === nbr.id && norm(h.address) === norm(address));
+      if (dupe) { KV = { ...KV, level: "home", homeId: dupe.id }; renderKnock(); toast("Already saved — opening it"); return; }
       const id = tempId();
-      const notMoved = $("hNotMoved").checked;
-      const photoFile = $("hPhoto").files[0];
-      const photo = photoFile ? await shrinkPhoto(photoFile) : null;
-      const home = { id, nbrId: nbr.id, address, streetNo: no, street, notMovedIn: notMoved, note: $("hNote").value.trim(), leadIds: [] };
+      const home = { id, nbrId: nbr.id, address, streetNo: no, street, notMovedIn: false, note: "", leadIds: [] };
       T.homes.push(home); saveT();
-      enqueue({ kind: "create", table: TBL.homes, tempId: id, photo, photoField: "Photos", fields: {
-        Address: address, "Street No": no, Street: street, "Not Moved In": notMoved, Note: home.note, Neighborhood: [nbr.id] } });
-      KV.lastStreet = street; renderKnock(); toast(`${address} added`);
+      enqueue({ kind: "create", table: TBL.homes, tempId: id, fields: {
+        Address: address, "Street No": no, Street: street, Neighborhood: [nbr.id] } });
+      KV = { ...KV, level: "home", homeId: id };   // straight to the outcome screen
+      renderKnock(); toast(`${address} added`);
     };
     return;
   }
@@ -300,18 +303,35 @@ function renderKnock() {
   const chip = computeChip(home);
   const vs = T.visits.filter(v => v.homeId === home.id).sort((a, b) => new Date(b.when) - new Date(a.when));
   const history = vs.map(v => `<div class="visit-row"><span>${esc(v.outcome)}</span><span class="when">${fmtWhen(v.when)}</span></div>`).join("");
-  const outcomeCls = { "Talked — interested": "o-amber", "Talked — gave quote": "o-blue", "Talked — not interested": "o-red", "No answer — left tag": "o-green", "No answer — no tag": "o-green" };
+  const outcomeCls = { "Talked — interested": "o-amber", "Talked — gave quote": "o-blue", "Talked — not interested": "o-red", "No answer — left tag": "o-green", "No answer — no tag": "o-green", "Spotted": "o-purple" };
   el.innerHTML = `<button class="crumb" id="backHomes">‹ ${esc(nbr.name)}</button>
     <div class="card">
       <h2>${esc(home.address).toUpperCase()}</h2>
       <div style="margin:4px 0 10px"><span class="chip big ${chip.cls}">${esc(chip.label)}</span></div>
       ${home.note ? `<div class="note">${esc(home.note)}</div>` : ""}
-      ${chip.quote && !home.leadIds.length ? `<button class="btn" id="quoteHome">Quote this home →</button>` : ""}
       <div class="outcome-btns">${OUTCOMES.map(o => `<button class="${outcomeCls[o]}" data-out="${esc(o)}">${esc(o)}</button>`).join("")}</div>
+      ${home.leadIds.length ? "" : `<button class="btn" id="quoteHome">Create Quote →</button>`}
+      <details style="margin-top:12px"><summary class="note">+ note / photo</summary>
+        <textarea id="dNote" placeholder="Note (gate, dogs, fence age...)" style="margin-top:8px">${esc(home.note)}</textarea>
+        <button class="btn small sub" id="saveNote">Save note</button>
+        <input type="file" id="dPhoto" accept="image/*" capture="environment" style="margin-top:8px">
+      </details>
       <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:14px"><input type="checkbox" id="dNotMoved" style="width:auto" ${home.notMovedIn ? "checked" : ""}> Not moved in yet (watch)</label>
     </div>
     <div class="card"><h2>VISIT HISTORY</h2>${history || `<div class="empty">Never knocked.</div>`}</div>`;
   $("backHomes").onclick = () => { KV = { ...KV, level: "homes" }; renderKnock(); };
+  $("saveNote").onclick = () => {
+    home.note = $("dNote").value.trim(); saveT();
+    enqueue({ kind: "patch", table: TBL.homes, recordId: home.id, fields: { Note: home.note } });
+    toast("Note saved");
+  };
+  $("dPhoto").onchange = async () => {
+    const f = $("dPhoto").files[0]; if (!f) return;
+    const photo = await shrinkPhoto(f);
+    if (!photo) return toast("Couldn't read that photo — record unaffected");
+    enqueue({ kind: "photo", table: TBL.homes, recordId: home.id, photoField: "Photos", photo });
+    $("dPhoto").value = ""; toast("Photo queued 📸");
+  };
   el.querySelectorAll("[data-out]").forEach(b => b.onclick = () => {
     const outcome = b.dataset.out, when = new Date().toISOString();
     const v = { id: tempId(), homeId: home.id, outcome, when };
@@ -448,7 +468,21 @@ $("makeQuote").onclick = async () => {
     "Sections": sectionsText,
   }});
   localStorage.removeItem("hfs_pending_home");  // only after the record is safely queued
-  if (linkHome) { const h = T.homes.find(x => x.id === linkHome); if (h) { h.leadIds = ["pending"]; saveT(); } }
+  if (linkHome) {
+    const h = T.homes.find(x => x.id === linkHome);
+    if (h) { h.leadIds = ["pending"]; saveT(); }
+    // auto-log "Talked — gave quote" on the home this quote came from.
+    // Guard: skip if the latest visit is already a gave-quote from the past hour (no double entries).
+    const latest = T.visits.filter(v => v.homeId === linkHome).sort((a, b) => new Date(b.when) - new Date(a.when))[0];
+    const justLogged = latest && latest.outcome === "Talked — gave quote" && (Date.now() - new Date(latest.when).getTime()) < 3600000;
+    if (!justLogged) {
+      const when = new Date().toISOString();
+      const v = { id: tempId(), homeId: linkHome, outcome: "Talked — gave quote", when };
+      T.visits.push(v); saveT();
+      enqueue({ kind: "create", table: TBL.visits, tempId: v.id, fields: {
+        Label: `${address} — ${fmtWhen(when)}`, Outcome: "Talked — gave quote", When: when, Home: [linkHome] } });
+    }
+  }
 
   const file = new File([blob], `HFS Quote ${quoteNo}.pdf`, { type: "application/pdf" });
   const url = URL.createObjectURL(blob);

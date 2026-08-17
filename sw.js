@@ -1,5 +1,5 @@
 // HFS Pocket Office service worker - caches the app shell so it opens at the fence with no signal.
-const CACHE = "hfs-v8";
+const CACHE = "hfs-v9";
 const SHELL = ["./", "index.html", "app.js", "assets.js", "contract-terms.js", "queue.js", "jspdf.umd.min.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 
 self.addEventListener("install", (e) => {

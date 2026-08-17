@@ -150,7 +150,29 @@
       `total synced: ${net.created.length}/4`);
   }
 
-  // ============ TEST 5: the journal net ============
+  // ============ TEST 5: the chained field flow (v9) ============
+  // offline: neighborhood -> home -> tag visit -> quote(lead, linked to home) -> auto gave-quote visit
+  {
+    wipe(); net = { ...net, online: false, delayMs: 0, failWith: null, permanentOn: null, created: [], patched: [], seq: 0 };
+    const Q = mkQ();
+    Q.add({ kind: "create", table: "Neighborhoods", tempId: "tmp_N", fields: { Name: "Meadowlark Crossing" } });
+    Q.add({ kind: "create", table: "Homes", tempId: "tmp_H", fields: { Address: "12 Lark Ln", Neighborhood: ["tmp_N"] } });
+    Q.add({ kind: "create", table: "Visits", tempId: "tmp_V1", fields: { Label: "12 tag", Outcome: "No answer — left tag", Home: ["tmp_H"] } });
+    Q.add({ kind: "create", table: "Leads", tempId: "tmp_L", linkHome: "tmp_H", fields: { Address: "12 Lark Ln", Status: "Quoted" } });
+    Q.add({ kind: "create", table: "Visits", tempId: "tmp_V2", fields: { Label: "12 gave quote", Outcome: "Talked — gave quote", Home: ["tmp_H"] } });
+    const heldOffline = Q.counts().pending === 5;
+    net.online = true; await Q.flush(); await wait(150);
+    const order = net.created.map(c => c.table).join(",");
+    const home = net.created.find(c => c.table === "Homes");
+    const lead = net.created.find(c => c.table === "Leads");
+    const v2 = net.created.find(c => c.fields.Label === "12 gave quote");
+    const linkPatch = net.patched.find(p => p.url.includes(home?.id) && p.fields.Lead?.[0] === lead?.id);
+    report("Chained flow: home → visit → quote → auto-visit, parents always first, all linked",
+      heldOffline && order === "Neighborhoods,Homes,Visits,Leads,Visits" && v2?.fields.Home?.[0] === home?.id && !!linkPatch && Q.counts().pending === 0 && Q.counts().failed === 0,
+      order);
+  }
+
+  // ============ TEST 6: the journal net ============
   {
     wipe(); net = { ...net, online: false, created: [], seq: 0, permanentOn: null, failWith: null, delayMs: 0 };
     const Q = mkQ();
