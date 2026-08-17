@@ -781,14 +781,30 @@ function makeContractPdf(f) {
 
 // ---------- SETTINGS tab ----------
 async function refreshSettings() {
-  $("sToken").value = store.token; updateQueueBadge();
+  // the input NEVER holds the saved token — screenshots can't leak what isn't on screen
+  $("sToken").value = "";
+  $("tokenSaved").style.display = store.token ? "block" : "none";
+  $("tokenEntry").style.display = store.token ? "none" : "block";
+  maskToken();
+  updateQueueBadge();
   const el = $("nextNoDisplay");
   if (!store.token) { el.textContent = "— (add token first)"; return; }
   el.textContent = "checking…";
   try { el.textContent = await fetchNextQuoteNumber(); }
   catch (e) { el.textContent = "— (no signal right now)"; }
 }
-$("saveToken").onclick = () => { store.token = $("sToken").value.trim(); $("setupBanner").style.display = store.token ? "none" : "block"; toast("Token saved"); flushQueue(); refreshSettings(); };
+const maskToken = () => { $("tokenMask").textContent = "••••••••••••••••"; };
+$("revealTok").onpointerdown = (e) => { e.preventDefault(); $("tokenMask").textContent = store.token; };
+["pointerup", "pointerleave", "pointercancel"].forEach(ev => $("revealTok").addEventListener(ev, maskToken));
+$("revealTok").oncontextmenu = (e) => e.preventDefault();
+$("replaceTok").onclick = () => { $("tokenEntry").style.display = "block"; $("sToken").focus(); };
+$("saveToken").onclick = () => {
+  const v = $("sToken").value.trim();
+  if (!v) return toast("Paste the token first");
+  store.token = v; $("sToken").value = "";
+  $("setupBanner").style.display = "none";
+  toast("Token saved"); flushQueue(); refreshSettings();
+};
 $("testConn").onclick = async () => {
   $("connMsg").textContent = "Testing…";
   try {

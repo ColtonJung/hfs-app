@@ -168,9 +168,16 @@
   <section class="tab" id="tab-settings">
     <div class="card">
       <h2>CONNECTION</h2>
-      <label>Airtable token (paste once — stays on this phone)</label>
-      <input type="text" id="sToken" autocomplete="off" autocapitalize="none">
-      <button class="btn small" id="saveToken">Save token</button>
+      <div id="tokenSaved" style="display:none">
+        <div class="note">Airtable token: <b id="tokenMask" style="letter-spacing:2px; word-break:break-all; user-select:none; -webkit-user-select:none;">••••••••••••••••</b></div>
+        <button class="btn small sub" id="revealTok">Hold to reveal</button>
+        <button class="btn small sub" id="replaceTok">Replace token</button>
+      </div>
+      <div id="tokenEntry">
+        <label>Airtable token (paste once — stays on this phone)</label>
+        <input type="text" id="sToken" autocomplete="off" autocapitalize="none">
+        <button class="btn small" id="saveToken">Save token</button>
+      </div>
       <button class="btn small sub" id="testConn">Test connection</button>
       <div class="note" id="connMsg"></div>
     </div>
